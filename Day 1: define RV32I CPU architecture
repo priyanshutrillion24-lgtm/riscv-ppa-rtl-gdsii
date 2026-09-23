@@ -1,1 +1,789 @@
+# Day 1: Define RV32I CPU Architecture
+
+## Project
+
+**PPA-Driven RTL-to-GDSII Implementation of a RISC-V CPU**
+
+---
+
+## 1. Objective
+
+The objective of Day 1 is to freeze the architectural specification of the RISC-V CPU before beginning RTL implementation.
+
+The CPU will implement the **RV32I base integer instruction set** using a **32-bit single-cycle microarchitecture**. The design will be developed as synthesizable SystemVerilog RTL and subsequently taken through synthesis, physical design, timing analysis, and final GDSII generation.
+
+The architecture is intentionally kept simple, deterministic, and synthesis-friendly so that the project can focus on **power, performance, and area (PPA) optimization**.
+
+---
+
+## 2. ISA Selection
+
+The selected ISA is:
+
+**RV32I**
+
+RV32I is the 32-bit base integer instruction set architecture.
+
+### ISA parameters
+
+| Parameter              | Specification     |
+| ---------------------- | ----------------- |
+| ISA                    | RV32I             |
+| XLEN                   | 32 bits           |
+| Integer registers      | 32                |
+| Register width         | 32 bits           |
+| `x0` behavior          | Hardwired to zero |
+| Base instruction width | 32 bits           |
+| Address width          | 32 bits           |
+| Instruction alignment  | 4 bytes           |
+
+---
+
+## 3. Instruction Set Scope
+
+The CPU will implement the ordinary RV32I integer, load/store, branch, and jump instruction set.
+
+### Upper-immediate instructions
+
+```text
+LUI
+AUIPC
+```
+
+### Jump instructions
+
+```text
+JAL
+JALR
+```
+
+### Branch instructions
+
+```text
+BEQ
+BNE
+BLT
+BGE
+BLTU
+BGEU
+```
+
+### Load instructions
+
+```text
+LB
+LH
+LW
+LBU
+LHU
+```
+
+### Store instructions
+
+```text
+SB
+SH
+SW
+```
+
+### Immediate arithmetic and logical instructions
+
+```text
+ADDI
+SLTI
+SLTIU
+XORI
+ORI
+ANDI
+SLLI
+SRLI
+SRAI
+```
+
+### Register-register arithmetic and logical instructions
+
+```text
+ADD
+SUB
+SLL
+SLT
+SLTU
+XOR
+SRL
+SRA
+OR
+AND
+```
+
+### System and fence behavior
+
+The baseline project does not implement a full privileged architecture, CSR subsystem, exception/trap subsystem, or memory-ordering subsystem.
+
+The behavior of:
+
+```text
+FENCE
+ECALL
+EBREAK
+```
+
+will therefore be explicitly documented in the instruction-support specification.
+
+---
+
+## 4. Microarchitecture
+
+The selected CPU microarchitecture is:
+
+> **32-bit single-cycle RISC-V processor**
+
+Each instruction completes its complete datapath operation within one clock cycle.
+
+The basic execution sequence is:
+
+```text
+FETCH
+  ↓
+DECODE
+  ↓
+REGISTER READ
+  ↓
+EXECUTE
+  ↓
+MEMORY ACCESS (if required)
+  ↓
+WRITEBACK
+  ↓
+NEXT PC
+```
+
+### Reason for selecting a single-cycle architecture
+
+A single-cycle architecture was selected because it:
+
+* reduces control complexity;
+* simplifies RTL development;
+* simplifies functional verification;
+* provides a clear datapath for academic analysis;
+* allows the project to concentrate on RTL-to-GDSII implementation and PPA optimization.
+
+A pipelined architecture is considered future work and is not part of the baseline implementation.
+
+---
+
+## 5. CPU Datapath
+
+The CPU consists of the following major blocks:
+
+```text
+                    +------------------+
+                    | Program Counter  |
+                    |      (PC)        |
+                    +--------+---------+
+                             |
+                             v
+                    +------------------+
+                    | Instruction      |
+                    | Memory Interface |
+                    +--------+---------+
+                             |
+                             v
+                    +------------------+
+                    | Instruction      |
+                    | Decoder          |
+                    +--------+---------+
+                             |
+                 +-----------+-----------+
+                 |                       |
+                 v                       v
+          +-------------+         +-------------+
+          | Register    |         | Immediate   |
+          | File        |         | Generator   |
+          | 32 × 32     |         |             |
+          +------+------+         +------+------+
+                 |                       |
+                 +-----------+-----------+
+                             |
+                             v
+                         +-------+
+                         |  ALU  |
+                         +---+---+
+                             |
+                +------------+------------+
+                |                         |
+                v                         v
+         +--------------+          +-------------+
+         | Data Memory  |          | Branch /    |
+         | Interface    |          | Jump Unit   |
+         +------+-------+          +------+------+ 
+                |                         |
+                v                         |
+         +--------------+                 |
+         | Load Data    |                 |
+         | Formatter    |                 |
+         +------+-------+                 |
+                |                         |
+                +------------+------------+
+                             |
+                             v
+                      +-------------+
+                      | Writeback   |
+                      |     MUX     |
+                      +-------------+
+                             |
+                             v
+                       Register File
+
+                 Next-PC selection
+                       |
+                       v
+                       PC
+```
+
+---
+
+## 6. Program Counter
+
+The Program Counter is a 32-bit register containing the address of the current instruction.
+
+For normal sequential execution:
+
+```text
+next_pc = pc + 4
+```
+
+For control-transfer instructions, the next PC may instead be:
+
+```text
+branch target
+```
+
+or:
+
+```text
+jump target
+```
+
+The final next-PC selection is performed using a dedicated next-PC multiplexer/control structure.
+
+---
+
+## 7. Register File
+
+The CPU contains:
+
+```text
+32 registers × 32 bits
+```
+
+Registers are:
+
+```text
+x0 – x31
+```
+
+The architectural zero register is:
+
+```text
+x0 = 0
+```
+
+Any attempted write to `x0` must leave it unchanged.
+
+The register file provides two read operands and one write destination:
+
+```text
+rs1 → read data 1
+rs2 → read data 2
+rd  → write data
+```
+
+The register file will be implemented as synthesizable RTL in the CPU core.
+
+---
+
+## 8. Immediate Generator
+
+The immediate generator extracts and formats immediate operands from the 32-bit instruction.
+
+The following immediate formats must be supported:
+
+```text
+I-type
+S-type
+B-type
+U-type
+J-type
+```
+
+The immediate generator produces a 32-bit immediate value suitable for the ALU, branch/jump logic, or writeback path.
+
+Signed immediates are sign-extended to 32 bits as required by the instruction.
+
+---
+
+## 9. ALU
+
+The Arithmetic Logic Unit is the primary execution datapath.
+
+The ALU supports:
+
+```text
+ADD
+SUB
+AND
+OR
+XOR
+SLL
+SRL
+SRA
+SLT
+SLTU
+```
+
+The second ALU operand can be selected from either:
+
+```text
+rs2 register data
+```
+
+or:
+
+```text
+generated immediate
+```
+
+depending on the instruction.
+
+---
+
+## 10. Branch and Jump Unit
+
+The branch/jump unit determines whether the CPU continues to:
+
+```text
+PC + 4
+```
+
+or transfers control to another address.
+
+Supported branch instructions:
+
+```text
+BEQ
+BNE
+BLT
+BGE
+BLTU
+BGEU
+```
+
+Supported jump instructions:
+
+```text
+JAL
+JALR
+```
+
+The branch/jump logic uses register comparison results, immediate offsets, and the current PC to calculate the target address.
+
+---
+
+## 11. Memory Architecture
+
+The CPU uses a **Harvard-style memory organization** with separate instruction-memory and data-memory interfaces.
+
+```text
+                    +----------------+
+                    |    RV32I CPU   |
+                    +-------+--------+
+                            |
+              +-------------+-------------+
+              |                           |
+              v                           v
+      Instruction Memory             Data Memory
+```
+
+The physical memory arrays are kept outside the CPU core.
+
+### Instruction memory interface
+
+```text
+imem_addr
+imem_rdata
+```
+
+### Data memory interface
+
+```text
+dmem_addr
+dmem_wdata
+dmem_rdata
+dmem_re
+dmem_we
+dmem_byte_en
+```
+
+The full memory architecture is specified separately in:
+
+```text
+docs/memory_architecture.md
+```
+
+---
+
+## 12. Memory Parameters
+
+| Parameter           | Specification  |
+| ------------------- | -------------- |
+| Address width       | 32 bits        |
+| Instruction width   | 32 bits        |
+| Data width          | 32 bits        |
+| Addressing          | Byte-addressed |
+| Endianness          | Little-endian  |
+| Data access sizes   | 8, 16, 32 bits |
+| Byte enables        | 4 bits         |
+| Misaligned accesses | Not supported  |
+| Instruction cache   | Not included   |
+| Data cache          | Not included   |
+| MMU/TLB             | Not included   |
+
+---
+
+## 13. Clock and Reset
+
+The processor uses:
+
+```text
+clk
+rst
+```
+
+The baseline reset strategy is a synchronous active-high reset.
+
+The Program Counter and sequential CPU state are initialized during reset.
+
+The memories are external to the CPU and are therefore not part of the CPU reset state.
+
+---
+
+## 14. Control Architecture
+
+The instruction decoder acts as the main control unit.
+
+The decoder generates control signals that determine:
+
+* ALU operation;
+* ALU operand selection;
+* register write enable;
+* memory read enable;
+* memory write enable;
+* memory byte enables;
+* writeback source;
+* branch operation;
+* jump operation;
+* next-PC selection.
+
+Conceptually:
+
+```text
+                 instruction
+                      |
+                      v
+               +-------------+
+               |   Decoder   |
+               +------+------+
+                      |
+        +-------------+-------------+
+        |      |       |      |     |
+        v      v       v      v     v
+      ALU    Reg     Mem    WB    PC/Branch
+      Ctrl   Write   Ctrl   Sel    Ctrl
+```
+
+---
+
+## 15. Writeback Architecture
+
+The writeback path selects the value that is written to the destination register.
+
+Possible writeback sources are:
+
+```text
+1. ALU result
+2. Data-memory load result
+3. PC + 4
+```
+
+Conceptually:
+
+```text
+ALU result --------\
+                    \
+Memory data --------> Writeback MUX → Register File
+                    /
+PC + 4 ------------/
+```
+
+---
+
+## 16. Target ASIC Technology
+
+The baseline physical-design target is:
+
+```text
+Sky130
+```
+
+The CPU will be taken through an open-source RTL-to-GDSII implementation flow using LibreLane/OpenROAD.
+
+The intended flow is:
+
+```text
+SystemVerilog RTL
+        ↓
+Simulation
+        ↓
+Synthesis
+        ↓
+Floorplanning
+        ↓
+Placement
+        ↓
+Clock Tree Synthesis
+        ↓
+Routing
+        ↓
+Parasitic Extraction
+        ↓
+Static Timing Analysis
+        ↓
+DRC
+        ↓
+LVS
+        ↓
+GDSII
+```
+
+---
+
+## 17. PPA Objective
+
+The project is not only intended to demonstrate functional CPU design.
+
+The primary research objective is to study the trade-off between:
+
+```text
+Power
+Performance
+Area
+```
+
+The initial CPU implementation will be used as the baseline.
+
+Subsequent optimization experiments may modify:
+
+* RTL datapath structure;
+* decoder/control logic;
+* mux structure;
+* resource sharing;
+* timing constraints;
+* core utilization;
+* placement parameters;
+* clock-tree parameters;
+* routing-related parameters.
+
+Each experiment will be recorded and compared against the baseline.
+
+---
+
+## 18. PPA Metrics
+
+For each implementation run, the following metrics will be collected where supported by the selected flow:
+
+```text
+Area
+Cell count
+Clock period
+Maximum frequency
+WNS
+TNS
+Power
+Utilization
+Congestion
+Buffer count
+DRC violations
+LVS result
+```
+
+A PPA experiment will change a limited number of variables at a time so that the effect of each optimization can be identified.
+
+---
+
+## 19. Verification Strategy
+
+The CPU will be verified using self-checking simulation.
+
+The initial testbench will support:
+
+```text
+instruction memory model
+data memory model
+clock generation
+reset generation
+program loading
+result checking
+```
+
+The verification suite will cover:
+
+```text
+Arithmetic instructions
+Logical instructions
+Shift instructions
+Comparison instructions
+Immediate instructions
+Loads
+Stores
+Branches
+Jumps
+Memory ordering within the supported model
+Register x0 behavior
+Reset behavior
+```
+
+Example programs will include:
+
+```text
+Arithmetic test
+Memory test
+Branch test
+Jump test
+Loop test
+Fibonacci
+Array operations
+```
+
+A CPU version will not be considered ready for physical implementation until the functional regression passes.
+
+---
+
+## 20. Architectural Constraints
+
+The following are deliberately excluded from the baseline architecture:
+
+```text
+M extension
+A extension
+F extension
+D extension
+C extension
+Vector extension
+Instruction cache
+Data cache
+MMU
+TLB
+Virtual memory
+Pipeline
+Out-of-order execution
+Branch prediction
+Interrupt controller
+External peripherals
+Large on-core SRAM arrays
+```
+
+These features may be mentioned as future extensions but are not required for the baseline 30-day project.
+
+---
+
+## 21. Architecture Freeze
+
+The following decisions are considered frozen at the end of Day 1:
+
+```text
+ISA              = RV32I
+Datapath         = 32-bit
+Microarchitecture= Single-cycle
+Memory           = Harvard-style
+Instruction bus  = 32-bit
+Data bus         = 32-bit
+Address          = 32-bit byte address
+Endianness       = Little-endian
+Registers        = 32 × 32-bit
+x0               = Hardwired to zero
+Alignment        = Naturally aligned accesses
+Caches           = None
+MMU/TLB          = None
+Target technology= Sky130
+RTL              = SystemVerilog
+```
+
+Any later architectural modification must be documented as a project change rather than silently changing the baseline.
+
+---
+
+## 22. Day 1 Deliverables
+
+At the end of Day 1, the following documents/artifacts should exist:
+
+```text
+docs/architecture.md
+docs/instruction_support.md
+docs/memory_architecture.md
+```
+
+and:
+
+```text
+Final CPU block diagram
+Instruction support table
+Memory architecture specification
+Architectural parameter table
+```
+
+---
+
+## 23. Day 1 Completion Criteria
+
+Day 1 is considered complete when:
+
+* the RV32I ISA scope is frozen;
+* the CPU is defined as single-cycle;
+* the major datapath blocks are identified;
+* the memory interface is defined;
+* the register-file organization is defined;
+* the clock/reset strategy is defined;
+* unsupported features are documented;
+* the target technology and implementation flow are selected;
+* the architecture documentation is committed to Git.
+
+---
+
+## 24. Architecture Summary
+
+The final baseline architecture is:
+
+```text
+                 +----------------------+
+                 |      RV32I CPU       |
+                 |     Single-Cycle     |
+                 |                      |
+                 |  PC                  |
+                 |  Decoder             |
+                 |  Register File       |
+                 |  Immediate Generator |
+                 |  ALU                 |
+                 |  Branch/Jump Unit    |
+                 |  Writeback           |
+                 |                      |
+                 +----------+-----------+
+                            |
+              +-------------+-------------+
+              |                           |
+              v                           v
+       Instruction Memory           Data Memory
+          (External)                 (External)
+```
+
+This architecture provides a simple, complete, and synthesis-friendly baseline for the subsequent RTL implementation and PPA-driven RTL-to-GDSII study.
 
